@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blockspeed"
+version = "0.1.0"
+description = "Validation ladder for block-parallel fast LLM generation: roofline measurements, an honesty harness (judge-PPL + entropy), and few-step distillation experiments."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "transformers>=4.44",
+    "numpy",
+    "matplotlib",
+    "huggingface_hub",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
