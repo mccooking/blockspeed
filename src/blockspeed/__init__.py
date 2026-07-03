@@ -8,4 +8,4 @@ NB-3  distill ladder -- 8 -> 4 -> 2 -> 1 steps/block on a public teacher
 Heavy imports (torch/transformers) happen inside submodules, not here.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
