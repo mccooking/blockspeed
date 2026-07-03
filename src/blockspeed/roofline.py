@@ -56,7 +56,10 @@ def load_model(model_name: str, device: str | None = None, dtype: torch.dtype | 
         if device == "cpu":
             dtype = torch.float32
         else:
-            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            # bf16 only on Ampere+ (cc >= 8.0). Turing (T4) runs bf16 via slow
+            # emulation, and torch.cuda.is_bf16_supported() still says yes.
+            major, _ = torch.cuda.get_device_capability(0)
+            dtype = torch.bfloat16 if major >= 8 else torch.float16
     model = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype)
     model.to(device)
     model.eval()
@@ -144,22 +147,36 @@ def measure(
     }
 
 
-def free_widths(result: dict, slack: float = 1.3) -> dict[int, int]:
-    """Per ctx: the largest W whose pass still costs <= slack x the W=1 pass."""
+def free_widths(result: dict, slack: float = 1.3, baseline_width: int | None = None) -> dict[int, int]:
+    """Per ctx: the largest W whose pass costs <= slack x the baseline-width pass.
+
+    baseline_width defaults to the smallest measured width. W=1 uses a
+    different kernel family (matrix-vector) than W>=2 (matrix-matrix), so
+    comparing against W=2 as well guards the verdict from that discontinuity.
+    """
     out: dict[int, int] = {}
-    for row in result["rows"]:
-        if row["cost_ratio_vs_w1"] <= slack:
-            out[row["ctx"]] = max(out.get(row["ctx"], 0), row["width"])
+    for ctx in sorted({r["ctx"] for r in result["rows"]}):
+        rows = [r for r in result["rows"] if r["ctx"] == ctx]
+        bw = baseline_width if baseline_width is not None else min(r["width"] for r in rows)
+        base = next((r for r in rows if r["width"] == bw), None)
+        if base is None:
+            continue
+        for r in rows:
+            if r["ms_per_pass"] <= slack * base["ms_per_pass"]:
+                out[ctx] = max(out.get(ctx, 0), r["width"])
     return out
 
 
 def verdict(result: dict) -> str:
+    widths = sorted({r["width"] for r in result["rows"]})
     lines = [f"{result['model']} on {result['device']} ({result['dtype']}):"]
-    for slack in (1.3, 2.0):
-        for ctx, w in sorted(free_widths(result, slack).items()):
-            lines.append(
-                f"  ctx {ctx}: up to {w} tokens per pass at <= {slack:.1f}x the cost of 1"
-            )
+    baselines = widths[:1] if len(widths) < 2 else widths[:2]
+    for bw in baselines:
+        for slack in (1.3, 2.0):
+            for ctx, w in sorted(free_widths(result, slack, baseline_width=bw).items()):
+                lines.append(
+                    f"  ctx {ctx}: up to {w} tokens per pass at <= {slack:.1f}x the cost of a W={bw} pass"
+                )
     return "\n".join(lines)
 
 
